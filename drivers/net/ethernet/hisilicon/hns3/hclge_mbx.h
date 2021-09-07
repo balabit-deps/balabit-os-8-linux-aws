@@ -45,8 +45,10 @@ enum HCLGE_MBX_OPCODE {
 	HCLGE_MBX_GET_LINK_MODE,	/* (VF -> PF) get the link mode of pf */
 	HCLGE_MBX_PUSH_VLAN_INFO,	/* (PF -> VF) push port base vlan */
 	HCLGE_MBX_GET_MEDIA_TYPE,       /* (VF -> PF) get media type */
+	HCLGE_MBX_PUSH_PROMISC_INFO,	/* (PF -> VF) push vf promisc info */
+	HCLGE_MBX_VF_UNINIT,            /* (VF -> PF) vf is unintializing */
 
-	HCLGE_MBX_GET_VF_FLR_STATUS = 200, /* (M7 -> PF) get vf reset status */
+	HCLGE_MBX_GET_VF_FLR_STATUS = 200, /* (M7 -> PF) get vf flr status */
 	HCLGE_MBX_PUSH_LINK_STATUS,	/* (M7 -> PF) get port link status */
 	HCLGE_MBX_NCSI_ERROR,		/* (M7 -> PF) receive a NCSI error */
 };
@@ -71,7 +73,7 @@ enum hclge_mbx_vlan_cfg_subcode {
 };
 
 #define HCLGE_MBX_MAX_MSG_SIZE	16
-#define HCLGE_MBX_MAX_RESP_DATA_SIZE	8
+#define HCLGE_MBX_MAX_RESP_DATA_SIZE	8U
 #define HCLGE_MBX_RING_MAP_BASIC_MSG_NUM	3
 #define HCLGE_MBX_RING_NODE_VARIABLE_NUM	3
 
@@ -123,7 +125,7 @@ struct hclgevf_mbx_arq_ring {
 #define hclge_mbx_ring_ptr_move_crq(crq) \
 	(crq->next_to_use = (crq->next_to_use + 1) % crq->desc_num)
 #define hclge_mbx_tail_ptr_move_arq(arq) \
-	(arq.tail = (arq.tail + 1) % HCLGE_MBX_MAX_ARQ_MSG_SIZE)
+		(arq.tail = (arq.tail + 1) % HCLGE_MBX_MAX_ARQ_MSG_NUM)
 #define hclge_mbx_head_ptr_move_arq(arq) \
-		(arq.head = (arq.head + 1) % HCLGE_MBX_MAX_ARQ_MSG_SIZE)
+		(arq.head = (arq.head + 1) % HCLGE_MBX_MAX_ARQ_MSG_NUM)
 #endif

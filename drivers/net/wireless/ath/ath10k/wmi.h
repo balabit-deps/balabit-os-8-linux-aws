@@ -3786,6 +3786,8 @@ struct wmi_pdev_param_map {
 	u32 arp_srcaddr;
 	u32 arp_dstaddr;
 	u32 enable_btcoex;
+	u32 rfkill_config;
+	u32 rfkill_enable;
 };
 
 #define WMI_PDEV_PARAM_UNSUPPORTED 0
@@ -6851,12 +6853,14 @@ struct wmi_svc_rdy_ev_arg {
 	__le32 num_mem_reqs;
 	__le32 low_5ghz_chan;
 	__le32 high_5ghz_chan;
+	__le32 sys_cap_info;
 	const __le32 *service_map;
 	size_t service_map_len;
 	const struct wlan_host_mem_req *mem_reqs[WMI_MAX_MEM_REQS];
 };
 
 struct wmi_svc_avail_ev_arg {
+	bool service_map_ext_valid;
 	__le32 service_map_ext_len;
 	const __le32 *service_map_ext;
 };

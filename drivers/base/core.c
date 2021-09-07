@@ -106,6 +106,16 @@ int device_links_read_lock_held(void)
 #endif
 #endif /* !CONFIG_SRCU */
 
+static bool device_is_ancestor(struct device *dev, struct device *target)
+{
+	while (target->parent) {
+		target = target->parent;
+		if (dev == target)
+			return true;
+	}
+	return false;
+}
+
 /**
  * device_is_dependent - Check if one device depends on another one
  * @dev: Device to check dependencies for.
@@ -119,7 +129,12 @@ static int device_is_dependent(struct device *dev, void *target)
 	struct device_link *link;
 	int ret;
 
-	if (dev == target)
+	/*
+	 * The "ancestors" check is needed to catch the case when the target
+	 * device has not been completely initialized yet and it is still
+	 * missing from the list of children of its parent device.
+	 */
+	if (dev == target || device_is_ancestor(dev, target))
 		return 1;
 
 	ret = device_for_each_child(dev, target, device_is_dependent);
@@ -454,8 +469,7 @@ static void __device_link_del(struct kref *kref)
 	dev_dbg(link->consumer, "Dropping the link to %s\n",
 		dev_name(link->supplier));
 
-	if (link->flags & DL_FLAG_PM_RUNTIME)
-		pm_runtime_drop_link(link->consumer);
+	pm_runtime_drop_link(link);
 
 	list_del_rcu(&link->s_node);
 	list_del_rcu(&link->c_node);
@@ -469,8 +483,7 @@ static void __device_link_del(struct kref *kref)
 	dev_info(link->consumer, "Dropping the link to %s\n",
 		 dev_name(link->supplier));
 
-	if (link->flags & DL_FLAG_PM_RUNTIME)
-		pm_runtime_drop_link(link->consumer);
+	pm_runtime_drop_link(link);
 
 	list_del(&link->s_node);
 	list_del(&link->c_node);
@@ -3170,6 +3183,126 @@ out:
 }
 EXPORT_SYMBOL_GPL(device_move);
 
+static int device_attrs_change_owner(struct device *dev, kuid_t kuid,
+				     kgid_t kgid)
+{
+	struct kobject *kobj = &dev->kobj;
+	struct class *class = dev->class;
+	const struct device_type *type = dev->type;
+	int error;
+
+	if (class) {
+		/*
+		 * Change the device groups of the device class for @dev to
+		 * @kuid/@kgid.
+		 */
+		error = sysfs_groups_change_owner(kobj, class->dev_groups, kuid,
+						  kgid);
+		if (error)
+			return error;
+	}
+
+	if (type) {
+		/*
+		 * Change the device groups of the device type for @dev to
+		 * @kuid/@kgid.
+		 */
+		error = sysfs_groups_change_owner(kobj, type->groups, kuid,
+						  kgid);
+		if (error)
+			return error;
+	}
+
+	/* Change the device groups of @dev to @kuid/@kgid. */
+	error = sysfs_groups_change_owner(kobj, dev->groups, kuid, kgid);
+	if (error)
+		return error;
+
+	if (device_supports_offline(dev) && !dev->offline_disabled) {
+		/* Change online device attributes of @dev to @kuid/@kgid. */
+		error = sysfs_file_change_owner(kobj, dev_attr_online.attr.name,
+						kuid, kgid);
+		if (error)
+			return error;
+	}
+
+	return 0;
+}
+
+/**
+ * device_change_owner - change the owner of an existing device.
+ * @dev: device.
+ * @kuid: new owner's kuid
+ * @kgid: new owner's kgid
+ *
+ * This changes the owner of @dev and its corresponding sysfs entries to
+ * @kuid/@kgid. This function closely mirrors how @dev was added via driver
+ * core.
+ *
+ * Returns 0 on success or error code on failure.
+ */
+int device_change_owner(struct device *dev, kuid_t kuid, kgid_t kgid)
+{
+	int error;
+	struct kobject *kobj = &dev->kobj;
+
+	dev = get_device(dev);
+	if (!dev)
+		return -EINVAL;
+
+	/*
+	 * Change the kobject and the default attributes and groups of the
+	 * ktype associated with it to @kuid/@kgid.
+	 */
+	error = sysfs_change_owner(kobj, kuid, kgid);
+	if (error)
+		goto out;
+
+	/*
+	 * Change the uevent file for @dev to the new owner. The uevent file
+	 * was created in a separate step when @dev got added and we mirror
+	 * that step here.
+	 */
+	error = sysfs_file_change_owner(kobj, dev_attr_uevent.attr.name, kuid,
+					kgid);
+	if (error)
+		goto out;
+
+	/*
+	 * Change the device groups, the device groups associated with the
+	 * device class, and the groups associated with the device type of @dev
+	 * to @kuid/@kgid.
+	 */
+	error = device_attrs_change_owner(dev, kuid, kgid);
+	if (error)
+		goto out;
+
+	error = dpm_sysfs_change_owner(dev, kuid, kgid);
+	if (error)
+		goto out;
+
+#ifdef CONFIG_BLOCK
+	if (sysfs_deprecated && dev->class == &block_class)
+		goto out;
+#endif
+
+	/*
+	 * Change the owner of the symlink located in the class directory of
+	 * the device class associated with @dev which points to the actual
+	 * directory entry for @dev to @kuid/@kgid. This ensures that the
+	 * symlink shows the same permissions as its target.
+	 */
+	error = sysfs_link_change_owner(&dev->class->p->subsys.kobj, &dev->kobj,
+					dev_name(dev), kuid, kgid);
+	if (error)
+		goto out;
+
+out:
+	put_device(dev);
+	return error;
+}
+EXPORT_SYMBOL_GPL(device_change_owner);
+
 /**
  * device_shutdown - call ->shutdown() on each device to shutdown.
  */
@@ -3400,9 +3533,10 @@ static inline bool fwnode_is_primary(struct fwnode_handle *fwnode)
  */
 void set_primary_fwnode(struct device *dev, struct fwnode_handle *fwnode)
 {
-	if (fwnode) {
-		struct fwnode_handle *fn = dev->fwnode;
+	struct device *parent = dev->parent;
+	struct fwnode_handle *fn = dev->fwnode;
 
+	if (fwnode) {
 		if (fwnode_is_primary(fn))
 			fn = fn->secondary;
 
@@ -3412,8 +3546,13 @@ void set_primary_fwnode(struct device *dev, struct fwnode_handle *fwnode)
 		}
 		dev->fwnode = fwnode;
 	} else {
-		dev->fwnode = fwnode_is_primary(dev->fwnode) ?
-			dev->fwnode->secondary : NULL;
+		if (fwnode_is_primary(fn)) {
+			dev->fwnode = fn->secondary;
+			if (!(parent && fn == parent->fwnode))
+				fn->secondary = NULL;
+		} else {
+			dev->fwnode = NULL;
+		}
 	}
 }
 EXPORT_SYMBOL_GPL(set_primary_fwnode);

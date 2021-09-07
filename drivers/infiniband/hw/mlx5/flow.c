@@ -13,6 +13,7 @@
 #include <rdma/ib_umem.h>
 #include <linux/mlx5/driver.h>
 #include <linux/mlx5/fs.h>
+#include <linux/mlx5/eswitch.h>
 #include "mlx5_ib.h"
 
 #define UVERBS_MODULE_NAME mlx5_ib
@@ -85,6 +86,8 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_CREATE_FLOW)(
 	struct mlx5_ib_dev *dev = mlx5_udata_to_mdev(&attrs->driver_udata);
 	int len, ret, i;
 	u32 counter_id = 0;
+	u32 *offset_attr;
+	u32 offset = 0;
 
 	if (!capable(CAP_NET_RAW))
 		return -EPERM;
@@ -151,8 +154,27 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_CREATE_FLOW)(
 	if (len) {
 		devx_obj = arr_flow_actions[0]->object;
 
-		if (!mlx5_ib_devx_is_flow_counter(devx_obj, &counter_id))
+		if (uverbs_attr_is_valid(attrs,
+					 MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX_OFFSET)) {
+
+			int num_offsets = uverbs_attr_ptr_get_array_size(
+				attrs,
+				MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX_OFFSET,
+				sizeof(u32));
+
+			if (num_offsets != 1)
+				return -EINVAL;
+
+			offset_attr = uverbs_attr_get_alloced_ptr(
+				attrs,
+				MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX_OFFSET);
+			offset = *offset_attr;
+		}
+
+		if (!mlx5_ib_devx_is_flow_counter(devx_obj, offset,
+						  &counter_id))
 			return -EINVAL;
+
 		flow_act.action |= MLX5_FLOW_CONTEXT_ACTION_COUNT;
 	}
 
@@ -315,6 +337,13 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_FLOW_MATCHER_CREATE)(
 	err = mlx5_ib_matcher_ns(attrs, obj);
 	if (err)
 		goto end;
+
+	if (obj->ns_type == MLX5_FLOW_NAMESPACE_FDB &&
+	    mlx5_eswitch_mode(dev->mdev->priv.eswitch) !=
+			      MLX5_ESWITCH_OFFLOADS) {
+		err = -EINVAL;
+		goto end;
+	}
 
 	uobj->object = obj;
 	obj->mdev = dev->mdev;
@@ -598,7 +627,11 @@ DECLARE_UVERBS_NAMED_METHOD(
 	UVERBS_ATTR_IDRS_ARR(MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX,
 			     MLX5_IB_OBJECT_DEVX_OBJ,
 			     UVERBS_ACCESS_READ, 1, 1,
-			     UA_OPTIONAL));
+			     UA_OPTIONAL),
+	UVERBS_ATTR_PTR_IN(MLX5_IB_ATTR_CREATE_FLOW_ARR_COUNTERS_DEVX_OFFSET,
+			   UVERBS_ATTR_MIN_SIZE(sizeof(u32)),
+			   UA_OPTIONAL,
+			   UA_ALLOC_AND_COPY));
 
 DECLARE_UVERBS_NAMED_METHOD_DESTROY(
 	MLX5_IB_METHOD_DESTROY_FLOW,

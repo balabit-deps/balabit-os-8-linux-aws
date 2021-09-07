@@ -436,10 +436,13 @@ enum qeth_qdio_out_buffer_state {
 	QETH_QDIO_BUF_EMPTY,
 	/* Filled by driver; owned by hardware in order to be sent. */
 	QETH_QDIO_BUF_PRIMED,
-	/* Identified to be pending in TPQ. */
+	/* Discovered by the TX completion code: */
 	QETH_QDIO_BUF_PENDING,
-	/* Found in completion queue. */
-	QETH_QDIO_BUF_IN_CQ,
+	/* Finished by the TX completion code: */
+	QETH_QDIO_BUF_NEED_QAOB,
+	/* Received QAOB notification on CQ: */
+	QETH_QDIO_BUF_QAOB_OK,
+	QETH_QDIO_BUF_QAOB_ERROR,
 	/* Handled via transfer pending / completion queue. */
 	QETH_QDIO_BUF_HANDLED_DELAYED,
 };
@@ -532,6 +535,8 @@ struct qeth_qdio_out_q {
 	struct timer_list timer;
 	struct qeth_hdr *prev_hdr;
 	u8 bulk_start;
+	u8 bulk_count;
+	u8 bulk_max;
 };
 
 #define qeth_for_each_output_queue(card, q, i)		\
@@ -620,6 +625,7 @@ struct qeth_ipato {
 
 struct qeth_channel {
 	struct ccw_device *ccwdev;
+	struct qeth_cmd_buffer *active_cmd;
 	enum qeth_channel_states state;
 	atomic_t irq_pending;
 };
@@ -879,6 +885,13 @@ static inline u16 qeth_iqd_translate_txq(struct net_device *dev, u16 txq)
 	return txq;
 }
 
+static inline bool qeth_iqd_is_mcast_queue(struct qeth_card *card,
+					   struct qeth_qdio_out_q *queue)
+{
+	return qeth_iqd_translate_txq(card->dev, queue->queue_no) ==
+	       QETH_IQD_MCAST_TXQ;
+}
+
 static inline void qeth_scrub_qdio_buffer(struct qdio_buffer *buf,
 					  unsigned int elements)
 {
@@ -1024,6 +1037,8 @@ int qeth_do_run_thread(struct qeth_card *, unsigned long);
 void qeth_clear_thread_start_bit(struct qeth_card *, unsigned long);
 void qeth_clear_thread_running_bit(struct qeth_card *, unsigned long);
 int qeth_core_hardsetup_card(struct qeth_card *card, bool *carrier_ok);
+int qeth_stop_channel(struct qeth_channel *channel);
+
 void qeth_print_status_message(struct qeth_card *);
 int qeth_init_qdio_queues(struct qeth_card *);
 int qeth_send_ipa_cmd(struct qeth_card *, struct qeth_cmd_buffer *,

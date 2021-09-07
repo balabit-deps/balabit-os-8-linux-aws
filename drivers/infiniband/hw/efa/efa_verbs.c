@@ -4,6 +4,7 @@
  */
 
 #include <linux/vmalloc.h>
+#include <linux/version.h>
 
 #include <rdma/ib_addr.h>
 #include <rdma/ib_umem.h>
@@ -82,7 +83,8 @@ static const char *const efa_stats_names[] = {
 #define EFA_CHUNK_USED_SIZE \
 	((EFA_PTRS_PER_CHUNK * EFA_CHUNK_PAYLOAD_PTR_SIZE) + EFA_CHUNK_PTR_SIZE)
 
-#define EFA_SUPPORTED_ACCESS_FLAGS IB_ACCESS_LOCAL_WRITE
+#define EFA_SUPPORTED_ACCESS_FLAGS \
+	(IB_ACCESS_LOCAL_WRITE | IB_ACCESS_REMOTE_READ)
 
 struct pbl_chunk {
 	dma_addr_t dma_addr;
@@ -829,7 +831,12 @@ int efa_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *qp_attr,
 	int err;
 
 	if (udata->inlen &&
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 	    !ib_is_udata_cleared(udata, 0, udata->inlen)) {
+#else
+	    /* WA for e093111ddb6c ("IB/core: Fix input len in multiple user verbs") */
+	    !ib_is_udata_cleared(udata, 0, udata->inlen - sizeof(struct ib_uverbs_cmd_hdr))) {
+#endif
 		ibdev_dbg(&dev->ibdev,
 			  "Incompatible ABI params, udata not cleared\n");
 		return -EINVAL;
@@ -1423,7 +1430,7 @@ struct ib_mr *efa_reg_mr(struct ib_pd *ibpd, u64 start, u64 length,
 		goto err_out;
 	}
 
-	mr->umem = ib_umem_get(udata, start, length, access_flags, 0);
+	mr->umem = ib_umem_get(udata, start, length, access_flags);
 	if (IS_ERR(mr->umem)) {
 		err = PTR_ERR(mr->umem);
 		ibdev_dbg(&dev->ibdev,
@@ -1434,7 +1441,7 @@ struct ib_mr *efa_reg_mr(struct ib_pd *ibpd, u64 start, u64 length,
 	params.pd = to_epd(ibpd)->pdn;
 	params.iova = virt_addr;
 	params.mr_length_in_bytes = length;
-	params.permissions = access_flags & 0x1;
+	params.permissions = access_flags;
 
 	pg_sz = ib_umem_find_best_pgsz(mr->umem,
 				       dev->dev_attr.page_size_cap,
@@ -1538,11 +1545,39 @@ static int efa_dealloc_uar(struct efa_dev *dev, u16 uarn)
 	return efa_com_dealloc_uar(&dev->edev, &params);
 }
 
+#define EFA_CHECK_USER_COMP(_dev, _comp_mask, _attr, _mask, _attr_str) \
+	(_attr_str = (!(_dev)->dev_attr._attr || ((_comp_mask) & (_mask))) ? \
+		     NULL : #_attr)
+
+static int efa_user_comp_handshake(const struct ib_ucontext *ibucontext,
+				   const struct efa_ibv_alloc_ucontext_cmd *cmd)
+{
+	struct efa_dev *dev = to_edev(ibucontext->device);
+	char *attr_str;
+
+	if (EFA_CHECK_USER_COMP(dev, cmd->comp_mask, max_tx_batch,
+				EFA_ALLOC_UCONTEXT_CMD_COMP_TX_BATCH, attr_str))
+		goto err;
+
+	if (EFA_CHECK_USER_COMP(dev, cmd->comp_mask, min_sq_depth,
+				EFA_ALLOC_UCONTEXT_CMD_COMP_MIN_SQ_WR,
+				attr_str))
+		goto err;
+
+	return 0;
+
+err:
+	ibdev_dbg(&dev->ibdev, "Userspace handshake failed for %s attribute\n",
+		  attr_str);
+	return -EOPNOTSUPP;
+}
+
 int efa_alloc_ucontext(struct ib_ucontext *ibucontext, struct ib_udata *udata)
 {
 	struct efa_ucontext *ucontext = to_eucontext(ibucontext);
 	struct efa_dev *dev = to_edev(ibucontext->device);
 	struct efa_ibv_alloc_ucontext_resp resp = {};
+	struct efa_ibv_alloc_ucontext_cmd cmd = {};
 	struct efa_com_alloc_uar_result result;
 	int err;
 
@@ -1550,6 +1585,18 @@ int efa_alloc_ucontext(struct ib_ucontext *ibucontext, struct ib_udata *udata)
 	 * it's fine if the driver does not know all request fields,
 	 * we will ack input fields in our response.
 	 */
+
+	err = ib_copy_from_udata(&cmd, udata,
+				 min(sizeof(cmd), udata->inlen));
+	if (err) {
+		ibdev_dbg(&dev->ibdev,
+			  "Cannot copy udata for alloc_ucontext\n");
+		goto err_out;
+	}
+
+	err = efa_user_comp_handshake(ibucontext, &cmd);
+	if (err)
+		goto err_out;
 
 	err = efa_com_alloc_uar(&dev->edev, &result);
 	if (err)
@@ -1563,6 +1610,8 @@ int efa_alloc_ucontext(struct ib_ucontext *ibucontext, struct ib_udata *udata)
 	resp.sub_cqs_per_cq = dev->dev_attr.sub_cqs_per_cq;
 	resp.inline_buf_size = dev->dev_attr.inline_buf_size;
 	resp.max_llq_size = dev->dev_attr.max_llq_size;
+	resp.max_tx_batch = dev->dev_attr.max_tx_batch;
+	resp.min_sq_wr = dev->dev_attr.min_sq_depth;
 
 	if (udata && udata->outlen) {
 		err = ib_copy_to_udata(udata, &resp,
@@ -1594,8 +1643,8 @@ static int __efa_mmap(struct efa_dev *dev, struct efa_ucontext *ucontext,
 {
 	struct efa_mmap_entry *entry;
 	unsigned long va;
+	int err = 0;
 	u64 pfn;
-	int err;
 
 	entry = mmap_entry_get(dev, ucontext, key, length);
 	if (!entry) {
@@ -1612,11 +1661,13 @@ static int __efa_mmap(struct efa_dev *dev, struct efa_ucontext *ucontext,
 	switch (entry->mmap_flag) {
 	case EFA_MMAP_IO_NC:
 		err = rdma_user_mmap_io(&ucontext->ibucontext, vma, pfn, length,
-					pgprot_noncached(vma->vm_page_prot));
+					pgprot_noncached(vma->vm_page_prot),
+					NULL);
 		break;
 	case EFA_MMAP_IO_WC:
 		err = rdma_user_mmap_io(&ucontext->ibucontext, vma, pfn, length,
-					pgprot_writecombine(vma->vm_page_prot));
+					pgprot_writecombine(vma->vm_page_prot),
+					NULL);
 		break;
 	case EFA_MMAP_DMA_PAGE:
 		for (va = vma->vm_start; va < vma->vm_end;

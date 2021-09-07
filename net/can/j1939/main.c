@@ -140,9 +140,9 @@ static struct j1939_priv *j1939_priv_create(struct net_device *ndev)
 static inline void j1939_priv_set(struct net_device *ndev,
 				  struct j1939_priv *priv)
 {
-	struct can_ml_priv *can_ml_priv = ndev->ml_priv;
+	struct can_ml_priv *can_ml = can_get_ml_priv(ndev);
 
-	can_ml_priv->j1939_priv = priv;
+	can_ml->j1939_priv = priv;
 }
 
 static void __j1939_priv_release(struct kref *kref)
@@ -192,8 +192,6 @@ static void j1939_can_rx_unregister(struct j1939_priv *priv)
 
 	can_rx_unregister(dev_net(ndev), ndev, J1939_CAN_ID, J1939_CAN_MASK,
 			  j1939_can_recv, priv);
-
-	j1939_priv_put(priv);
 }
 
 static void __j1939_rx_release(struct kref *kref)
@@ -206,17 +204,16 @@ static void __j1939_rx_release(struct kref *kref)
 	j1939_ecu_unmap_all(priv);
 	j1939_priv_set(priv->ndev, NULL);
 	spin_unlock(&j1939_netdev_lock);
+	synchronize_rcu();
+	j1939_priv_put(priv);
 }
 
 /* get pointer to priv without increasing ref counter */
 static inline struct j1939_priv *j1939_ndev_to_priv(struct net_device *ndev)
 {
-	struct can_ml_priv *can_ml_priv = ndev->ml_priv;
+	struct can_ml_priv *can_ml = can_get_ml_priv(ndev);
 
-	if (!can_ml_priv)
-		return NULL;
-
-	return can_ml_priv->j1939_priv;
+	return can_ml->j1939_priv;
 }
 
 static struct j1939_priv *j1939_priv_get_by_ndev_locked(struct net_device *ndev)
@@ -224,9 +221,6 @@ static struct j1939_priv *j1939_priv_get_by_ndev_locked(struct net_device *ndev)
 	struct j1939_priv *priv;
 
 	lockdep_assert_held(&j1939_netdev_lock);
-
-	if (ndev->type != ARPHRD_CAN)
-		return NULL;
 
 	priv = j1939_ndev_to_priv(ndev);
 	if (priv)
@@ -348,14 +342,15 @@ static int j1939_netdev_notify(struct notifier_block *nb,
 			       unsigned long msg, void *data)
 {
 	struct net_device *ndev = netdev_notifier_info_to_dev(data);
+	struct can_ml_priv *can_ml = can_get_ml_priv(ndev);
 	struct j1939_priv *priv;
+
+	if (!can_ml)
+		goto notify_done;
 
 	priv = j1939_priv_get_by_ndev(ndev);
 	if (!priv)
 		goto notify_done;
-
-	if (ndev->type != ARPHRD_CAN)
-		goto notify_put;
 
 	switch (msg) {
 	case NETDEV_DOWN:
@@ -365,7 +360,10 @@ static int j1939_netdev_notify(struct notifier_block *nb,
 		break;
 	}
 
-notify_put:
+	/* The last reference of priv is dropped by the RCU deferred
+	 * j1939_sk_sock_destruct() of the last socket, so we can
+	 * safely drop this reference here.
+	 */
 	j1939_priv_put(priv);
 
 notify_done:

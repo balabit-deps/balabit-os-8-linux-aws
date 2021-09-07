@@ -40,7 +40,7 @@ int ovl_copy_xattr(struct dentry *old, struct dentry *new)
 {
 	ssize_t list_size, size, value_size = 0;
 	char *buf, *name, *value = NULL;
-	int uninitialized_var(error);
+	int error = 0;
 	size_t slen;
 
 	if (!(old->d_inode->i_opflags & IOP_XATTR) ||
@@ -76,6 +76,14 @@ int ovl_copy_xattr(struct dentry *old, struct dentry *new)
 
 		if (ovl_is_private_xattr(name))
 			continue;
+
+		error = security_inode_copy_up_xattr(name);
+		if (error < 0 && error != -EOPNOTSUPP)
+			break;
+		if (error == 1) {
+			error = 0;
+			continue; /* Discard */
+		}
 retry:
 		size = vfs_getxattr(old, name, value, value_size);
 		if (size == -ERANGE)
@@ -99,13 +107,6 @@ retry:
 			goto retry;
 		}
 
-		error = security_inode_copy_up_xattr(name);
-		if (error < 0 && error != -EOPNOTSUPP)
-			break;
-		if (error == 1) {
-			error = 0;
-			continue; /* Discard */
-		}
 		error = vfs_setxattr(new, name, value, size, 0);
 		if (error)
 			break;
@@ -203,10 +204,19 @@ int ovl_set_attr(struct dentry *upperdentry, struct kstat *stat)
 {
 	int err = 0;
 
+	/*
+	 * For the most part we want to set the mode bits before setting
+	 * the user, otherwise the current context might lack permission
+	 * for setting the mode. However for sxid/sticky bits we want
+	 * the operation to fail if the current user isn't privileged
+	 * towards the resulting inode. So we first set the mode but
+	 * exclude the sxid/sticky bits, then set the user, then set the
+	 * mode again if any of the sxid/sticky bits are set.
+	 */
 	if (!S_ISLNK(stat->mode)) {
 		struct iattr attr = {
 			.ia_valid = ATTR_MODE,
-			.ia_mode = stat->mode,
+			.ia_mode = stat->mode & ~(S_ISUID|S_ISGID|S_ISVTX),
 		};
 		err = notify_change(upperdentry, &attr, NULL);
 	}
@@ -215,6 +225,14 @@ int ovl_set_attr(struct dentry *upperdentry, struct kstat *stat)
 			.ia_valid = ATTR_UID | ATTR_GID,
 			.ia_uid = stat->uid,
 			.ia_gid = stat->gid,
+		};
+		err = notify_change(upperdentry, &attr, NULL);
+	}
+	if (!err && !S_ISLNK(stat->mode) &&
+	    (stat->mode & (S_ISUID|S_ISGID|S_ISVTX))) {
+		struct iattr attr = {
+			.ia_valid = ATTR_MODE,
+			.ia_mode = stat->mode,
 		};
 		err = notify_change(upperdentry, &attr, NULL);
 	}
@@ -851,7 +869,7 @@ static int ovl_copy_up_one(struct dentry *parent, struct dentry *dentry,
 int ovl_copy_up_flags(struct dentry *dentry, int flags)
 {
 	int err = 0;
-	const struct cred *old_cred = ovl_override_creds(dentry->d_sb);
+	const struct cred *old_cred;
 	bool disconnected = (dentry->d_flags & DCACHE_DISCONNECTED);
 
 	/*
@@ -862,6 +880,7 @@ int ovl_copy_up_flags(struct dentry *dentry, int flags)
 	if (WARN_ON(disconnected && d_is_dir(dentry)))
 		return -EIO;
 
+	old_cred = ovl_override_creds(dentry->d_sb);
 	while (!err) {
 		struct dentry *next;
 		struct dentry *parent = NULL;

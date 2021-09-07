@@ -1232,6 +1232,11 @@ void intel_dp_dual_mode_set_tmds_output(struct intel_hdmi *hdmi, bool enable)
 	if (hdmi->dp_dual_mode.type < DRM_DP_DUAL_MODE_TYPE2_DVI)
 		return;
 
+	if (dev_priv->bypass_tmds_oe) {
+		DRM_DEBUG_KMS("Bypassing TMDS_OE setting\n");
+		return;
+	}
+
 	DRM_DEBUG_KMS("%s DP dual mode adaptor TMDS output\n",
 		      enable ? "Enabling" : "Disabling");
 
@@ -2129,7 +2134,11 @@ hdmi_port_clock_valid(struct intel_hdmi *hdmi,
 	if (clock > hdmi_port_clock_limit(hdmi, respect_downstream_limits, force_dvi))
 		return MODE_CLOCK_HIGH;
 
-	/* BXT DPLL can't generate 223-240 MHz */
+	/* GLK DPLL can't generate 446-480 MHz */
+	if (IS_GEMINILAKE(dev_priv) && clock > 446666 && clock < 480000)
+		return MODE_CLOCK_RANGE;
+
+	/* BXT/GLK DPLL can't generate 223-240 MHz */
 	if (IS_GEN9_LP(dev_priv) && clock > 223333 && clock < 240000)
 		return MODE_CLOCK_RANGE;
 

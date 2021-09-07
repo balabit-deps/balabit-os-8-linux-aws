@@ -6,6 +6,7 @@
 #ifndef _LINUX_BINDER_ALLOC_H
 #define _LINUX_BINDER_ALLOC_H
 
+#include <linux/kconfig.h>
 #include <linux/rbtree.h>
 #include <linux/list.h>
 #include <linux/mm.h>
@@ -23,6 +24,7 @@ struct binder_transaction;
  * @entry:              entry alloc->buffers
  * @rb_node:            node for allocated_buffers/free_buffers rb trees
  * @free:               %true if buffer is free
+ * @clear_on_free:      %true if buffer must be zeroed after use
  * @allow_user_free:    %true if user is allowed to free buffer
  * @async_transaction:  %true if buffer is in use for an async txn
  * @debug_id:           unique ID for debugging
@@ -40,9 +42,10 @@ struct binder_buffer {
 	struct rb_node rb_node; /* free entry by size or allocated entry */
 				/* by address */
 	unsigned free:1;
+	unsigned clear_on_free:1;
 	unsigned allow_user_free:1;
 	unsigned async_transaction:1;
-	unsigned debug_id:29;
+	unsigned debug_id:28;
 
 	struct binder_transaction *transaction;
 
@@ -105,7 +108,7 @@ struct binder_alloc {
 	size_t pages_high;
 };
 
-#ifdef CONFIG_ANDROID_BINDER_IPC_SELFTEST
+#if IS_ENABLED(CONFIG_ANDROID_BINDER_IPC_SELFTEST)
 void binder_selftest_alloc(struct binder_alloc *alloc);
 #else
 static inline void binder_selftest_alloc(struct binder_alloc *alloc) {}

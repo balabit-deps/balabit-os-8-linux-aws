@@ -27,6 +27,11 @@
 
 #define INL_HDR_START_SZ (sizeof(((struct mlx5_wqe_eth_seg *)NULL)->inline_hdr.start))
 
+static inline bool mlx5e_skb_is_multicast(struct sk_buff *skb)
+{
+	return skb->pkt_type == PACKET_MULTICAST || skb->pkt_type == PACKET_BROADCAST;
+}
+
 static inline bool
 mlx5e_wqc_has_room_for(struct mlx5_wq_cyc *wq, u16 cc, u16 pc, u16 n)
 {
@@ -179,6 +184,16 @@ mlx5e_tx_dma_unmap(struct device *pdev, struct mlx5e_sq_dma *dma)
 	}
 }
 
+static inline void mlx5e_rqwq_reset(struct mlx5e_rq *rq)
+{
+	if (rq->wq_type == MLX5_WQ_TYPE_LINKED_LIST_STRIDING_RQ) {
+		mlx5_wq_ll_reset(&rq->mpwqe.wq);
+		rq->mpwqe.actual_wq_head = 0;
+	} else {
+		mlx5_wq_cyc_reset(&rq->wqe.wq);
+	}
+}
+
 /* SW parser related functions */
 
 struct mlx5e_swp_spec {
@@ -188,6 +203,15 @@ struct mlx5e_swp_spec {
 	__be16 tun_l3_proto;
 	u8 tun_l4_proto;
 };
+
+static inline void mlx5e_eseg_swp_offsets_add_vlan(struct mlx5_wqe_eth_seg *eseg)
+{
+	/* SWP offsets are in 2-bytes words */
+	eseg->swp_outer_l3_offset += VLAN_HLEN / 2;
+	eseg->swp_outer_l4_offset += VLAN_HLEN / 2;
+	eseg->swp_inner_l3_offset += VLAN_HLEN / 2;
+	eseg->swp_inner_l4_offset += VLAN_HLEN / 2;
+}
 
 static inline void
 mlx5e_set_eseg_swp(struct sk_buff *skb, struct mlx5_wqe_eth_seg *eseg,

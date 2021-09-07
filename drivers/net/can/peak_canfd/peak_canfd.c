@@ -232,6 +232,20 @@ static int pucan_setup_rx_barrier(struct peak_canfd_priv *priv)
 	return pucan_write_cmd(priv);
 }
 
+static int pucan_netif_rx(struct sk_buff *skb, __le32 ts_low, __le32 ts_high)
+{
+	struct skb_shared_hwtstamps *hwts = skb_hwtstamps(skb);
+	u64 ts_us;
+
+	ts_us = (u64)le32_to_cpu(ts_high) << 32;
+	ts_us |= le32_to_cpu(ts_low);
+
+	/* IP core timestamps are µs. */
+	hwts->hwtstamp = ns_to_ktime(ts_us * NSEC_PER_USEC);
+
+	return netif_rx(skb);
+}
+
 /* handle the reception of one CAN frame */
 static int pucan_handle_can_rx(struct peak_canfd_priv *priv,
 			       struct pucan_rx_msg *msg)
@@ -248,8 +262,7 @@ static int pucan_handle_can_rx(struct peak_canfd_priv *priv,
 		cf_len = get_can_dlc(pucan_msg_get_dlc(msg));
 
 	/* if this frame is an echo, */
-	if ((rx_msg_flags & PUCAN_MSG_LOOPED_BACK) &&
-	    !(rx_msg_flags & PUCAN_MSG_SELF_RECEIVE)) {
+	if (rx_msg_flags & PUCAN_MSG_LOOPED_BACK) {
 		unsigned long flags;
 
 		spin_lock_irqsave(&priv->echo_lock, flags);
@@ -263,7 +276,13 @@ static int pucan_handle_can_rx(struct peak_canfd_priv *priv,
 		netif_wake_queue(priv->ndev);
 
 		spin_unlock_irqrestore(&priv->echo_lock, flags);
-		return 0;
+
+		/* if this frame is only an echo, stop here. Otherwise,
+		 * continue to push this application self-received frame into
+		 * its own rx queue.
+		 */
+		if (!(rx_msg_flags & PUCAN_MSG_SELF_RECEIVE))
+			return 0;
 	}
 
 	/* otherwise, it should be pushed into rx fifo */
@@ -299,7 +318,7 @@ static int pucan_handle_can_rx(struct peak_canfd_priv *priv,
 	stats->rx_bytes += cf->len;
 	stats->rx_packets++;
 
-	netif_rx(skb);
+	pucan_netif_rx(skb, msg->ts_low, msg->ts_high);
 
 	return 0;
 }
@@ -333,8 +352,8 @@ static int pucan_handle_status(struct peak_canfd_priv *priv,
 				return err;
 		}
 
-		/* start network queue (echo_skb array is empty) */
-		netif_start_queue(ndev);
+		/* wake network queue up (echo_skb array is empty) */
+		netif_wake_queue(ndev);
 
 		return 0;
 	}
@@ -393,7 +412,7 @@ static int pucan_handle_status(struct peak_canfd_priv *priv,
 
 	stats->rx_packets++;
 	stats->rx_bytes += cf->can_dlc;
-	netif_rx(skb);
+	pucan_netif_rx(skb, msg->ts_low, msg->ts_high);
 
 	return 0;
 }

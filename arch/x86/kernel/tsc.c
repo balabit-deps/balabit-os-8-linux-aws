@@ -14,6 +14,7 @@
 #include <linux/percpu.h>
 #include <linux/timex.h>
 #include <linux/static_key.h>
+#include <linux/suspend.h>
 
 #include <asm/hpet.h>
 #include <asm/timer.h>
@@ -44,7 +45,7 @@ static int __read_mostly tsc_unstable;
 
 static DEFINE_STATIC_KEY_FALSE(__use_tsc);
 
-int tsc_clocksource_reliable;
+int tsc_clocksource_reliable = 1;
 
 static u32 art_to_tsc_numerator;
 static u32 art_to_tsc_denominator;
@@ -289,6 +290,8 @@ static int __init tsc_setup(char *str)
 {
 	if (!strcmp(str, "reliable"))
 		tsc_clocksource_reliable = 1;
+	if (!strcmp(str, "unreliable"))
+		tsc_clocksource_reliable = 0;
 	if (!strncmp(str, "noirqtime", 9))
 		no_sched_irq_time = 1;
 	if (!strcmp(str, "unstable"))
@@ -1528,9 +1531,40 @@ unsigned long calibrate_delay_is_known(void)
 	if (!constant_tsc || !mask)
 		return 0;
 
+	if (cpu != 0)
+		return cpu_data(0).loops_per_jiffy;
+
 	sibling = cpumask_any_but(mask, cpu);
 	if (sibling < nr_cpu_ids)
 		return cpu_data(sibling).loops_per_jiffy;
 	return 0;
 }
 #endif
+
+static int tsc_pm_notifier(struct notifier_block *notifier,
+                          unsigned long pm_event, void *unused)
+{
+	switch (pm_event) {
+	case PM_HIBERNATION_PREPARE:
+		clear_sched_clock_stable();
+		break;
+	case PM_POST_HIBERNATION:
+		/* Set back to the default */
+		if (!check_tsc_unstable())
+			set_sched_clock_stable();
+		break;
+	}
+
+	return 0;
+};
+
+static struct notifier_block tsc_pm_notifier_block = {
+       .notifier_call = tsc_pm_notifier,
+};
+
+static int tsc_setup_pm_notifier(void)
+{
+       return register_pm_notifier(&tsc_pm_notifier_block);
+}
+
+subsys_initcall(tsc_setup_pm_notifier);

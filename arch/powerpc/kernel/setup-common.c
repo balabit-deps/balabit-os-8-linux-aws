@@ -31,6 +31,7 @@
 #include <linux/memblock.h>
 #include <linux/of_platform.h>
 #include <linux/hugetlb.h>
+#include <linux/security.h>
 #include <asm/debugfs.h>
 #include <asm/io.h>
 #include <asm/paca.h>
@@ -64,6 +65,7 @@
 #include <asm/mmu_context.h>
 #include <asm/cpu_has_feature.h>
 #include <asm/kasan.h>
+#include <asm/secure_boot.h>
 
 #include "setup.h"
 
@@ -855,6 +857,16 @@ void __init setup_arch(char **cmdline_p)
 	 */
 	initialize_cache_info();
 
+	/*
+	 * Lock down the kernel if booted in secure mode. This is required to
+	 * maintain kernel integrity.
+	 */
+	if (IS_ENABLED(CONFIG_LOCK_DOWN_IN_SECURE_BOOT)) {
+		if (is_ppc_secureboot_enabled())
+			security_lock_kernel_down("PowerNV Secure Boot mode",
+						  LOCKDOWN_INTEGRITY_MAX);
+	}
+
 	/* Initialize RTAS if available. */
 	rtas_initialize();
 
@@ -903,8 +915,6 @@ void __init setup_arch(char **cmdline_p)
 
 	/* On BookE, setup per-core TLB data structures. */
 	setup_tlb_core_data();
-
-	smp_release_cpus();
 #endif
 
 	/* Print various info about the machine that has been gathered so far. */
@@ -924,6 +934,8 @@ void __init setup_arch(char **cmdline_p)
 	irqstack_early_init();
 	exc_lvl_early_init();
 	emergency_stack_init();
+
+	smp_release_cpus();
 
 	initmem_init();
 

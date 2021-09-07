@@ -121,6 +121,7 @@ module_param_named(unmask_kbd_data, i8042_unmask_kbd_data, bool, 0600);
 MODULE_PARM_DESC(unmask_kbd_data, "Unconditional enable (may reveal sensitive data) of normally sanitize-filtered kbd data traffic debug log [pre-condition: i8042.debug=1 enabled]");
 #endif
 
+static bool i8042_present;
 static bool i8042_bypass_aux_irq_test;
 static char i8042_kbd_firmware_id[128];
 static char i8042_aux_firmware_id[128];
@@ -340,6 +341,9 @@ int i8042_command(unsigned char *param, int command)
 {
 	unsigned long flags;
 	int retval;
+
+	if (!i8042_present)
+		return -1;
 
 	spin_lock_irqsave(&i8042_lock, flags);
 	retval = __i8042_command(param, command);
@@ -611,7 +615,7 @@ static int i8042_enable_kbd_port(void)
 	if (i8042_command(&i8042_ctr, I8042_CMD_CTL_WCTR)) {
 		i8042_ctr &= ~I8042_CTR_KBDINT;
 		i8042_ctr |= I8042_CTR_KBDDIS;
-		pr_err("Failed to enable KBD port\n");
+		pr_info("Failed to enable KBD port\n");
 		return -EIO;
 	}
 
@@ -630,7 +634,7 @@ static int i8042_enable_aux_port(void)
 	if (i8042_command(&i8042_ctr, I8042_CMD_CTL_WCTR)) {
 		i8042_ctr &= ~I8042_CTR_AUXINT;
 		i8042_ctr |= I8042_CTR_AUXDIS;
-		pr_err("Failed to enable AUX port\n");
+		pr_info("Failed to enable AUX port\n");
 		return -EIO;
 	}
 
@@ -722,7 +726,7 @@ static int __init i8042_check_mux(void)
 	i8042_ctr &= ~I8042_CTR_AUXINT;
 
 	if (i8042_command(&i8042_ctr, I8042_CMD_CTL_WCTR)) {
-		pr_err("Failed to disable AUX port, can't use MUX\n");
+		pr_info("Failed to disable AUX port, can't use MUX\n");
 		return -EIO;
 	}
 
@@ -937,25 +941,28 @@ static int i8042_controller_selftest(void)
 {
 	unsigned char param;
 	int i = 0;
+	int ret;
 
 	/*
 	 * We try this 5 times; on some really fragile systems this does not
 	 * take the first time...
 	 */
-	do {
+	while (i++ < 5) {
 
-		if (i8042_command(&param, I8042_CMD_CTL_TEST)) {
-			pr_err("i8042 controller selftest timeout\n");
-			return -ENODEV;
-		}
-
-		if (param == I8042_RET_CTL_TEST)
+		ret = i8042_command(&param, I8042_CMD_CTL_TEST);
+		if (ret)
+			pr_info("i8042 controller selftest timeout (%d/5)\n", i);
+		else if (param == I8042_RET_CTL_TEST)
 			return 0;
+		else
+			dbg("i8042 controller selftest: %#x != %#x\n",
+			    param, I8042_RET_CTL_TEST);
 
-		dbg("i8042 controller selftest: %#x != %#x\n",
-		    param, I8042_RET_CTL_TEST);
 		msleep(50);
-	} while (i++ < 5);
+	}
+
+	if (ret)
+		return -ENODEV;
 
 #ifdef CONFIG_X86
 	/*
@@ -967,7 +974,7 @@ static int i8042_controller_selftest(void)
 	pr_info("giving up on controller selftest, continuing anyway...\n");
 	return 0;
 #else
-	pr_err("i8042 controller selftest failed\n");
+	pr_info("i8042 controller selftest failed\n");
 	return -EIO;
 #endif
 }
@@ -1464,7 +1471,8 @@ static int __init i8042_setup_aux(void)
 	if (error)
 		goto err_free_ports;
 
-	if (aux_enable())
+	error = aux_enable();
+	if (error)
 		goto err_free_irq;
 
 	i8042_aux_irq_registered = true;
@@ -1609,11 +1617,14 @@ static int __init i8042_init(void)
 
 	err = i8042_platform_init();
 	if (err)
-		return err;
+		return (err == -ENODEV) ? 0 : err;
 
 	err = i8042_controller_check();
 	if (err)
 		goto err_platform_exit;
+
+	/* Set this before creating the dev to allow i8042_command to work right away */
+	i8042_present = true;
 
 	pdev = platform_create_bundle(&i8042_driver, i8042_probe, NULL, 0, NULL, 0);
 	if (IS_ERR(pdev)) {
@@ -1633,6 +1644,9 @@ static int __init i8042_init(void)
 
 static void __exit i8042_exit(void)
 {
+	if (!i8042_present)
+		return;
+
 	platform_device_unregister(i8042_platform_device);
 	platform_driver_unregister(&i8042_driver);
 	i8042_platform_exit();
