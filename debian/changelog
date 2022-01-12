@@ -1,3 +1,22 @@
+linux-aws (5.4.0-1063.66) focal; urgency=medium
+
+  [ Ubuntu: 5.4.0-96.109 ]
+
+  * Support builtin revoked certificates (LP: #1932029)
+    - [Config]: add i386 to CONFIG_SYSTEM_REVOCATION_KEYS annotation
+  * CVE-2022-0185
+    - SAUCE: vfs: Out-of-bounds write of heap buffer in fs_context.c
+    - SAUCE: vfs: test that one given mount param is not larger than PAGE_SIZE
+
+  [ Ubuntu: 5.4.0-94.106 ]
+
+  * focal/linux: 5.4.0-94.106 -proposed tracker (LP: #1956628)
+  * [Regression] Focal kernel  5.4.0-92.103 fails to boot when Secure Encrypted
+    Virtualization(SEV) is enabled (LP: #1956575)
+    - x86/ioremap: Map EFI-reserved memory as encrypted for SEV
+
+ -- Stefan Bader <stefan.bader@canonical.com>  Wed, 12 Jan 2022 18:05:09 +0100
+
 linux-aws (5.4.0-1061.64) focal; urgency=medium
 
   * focal/linux-aws: 5.4.0-1061.64 -proposed tracker (LP: #1952285)
