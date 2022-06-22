@@ -101,6 +101,8 @@ setup-vm() {
     ip -netns hv-$id link set veth-tap master br0
     ip -netns hv-$id link set veth-tap up
 
+    ip link set veth-hv address 02:1d:8d:dd:0c:6$id
+
     ip link set veth-hv netns vm-$id
     ip -netns vm-$id addr add 10.0.0.$id/24 dev veth-hv
     ip -netns vm-$id link set veth-hv up
@@ -125,8 +127,5 @@ ip -netns hv-2 link set vxlan0 down
 ip -netns hv-2 link set vxlan0 up
 
 echo -n "Check VM connectivity through VXLAN (underlay in a VRF)            "
-if ! ip netns exec vm-1 ping -c 1 -W 1 10.0.0.2 &> /dev/null; then
-    echo "[XFAIL]"
-else
-    echo "[ OK ]"
-fi
+ip netns exec vm-1 ping -c 1 -W 1 10.0.0.2 &> /dev/null || (echo "[FAIL]"; false)
+echo "[ OK ]"
