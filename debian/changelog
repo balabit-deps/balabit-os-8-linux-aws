@@ -1,3 +1,19 @@
+linux-aws (5.4.0-1114.124) focal; urgency=medium
+
+  * focal/linux-aws: 5.4.0-1114.124 -proposed tracker (LP: #2041954)
+
+  [ Ubuntu: 5.4.0-167.184 ]
+
+  * focal/linux: 5.4.0-167.184 -proposed tracker (LP: #2041988)
+  * CVE-2023-45871
+    - igb: set max size RX buffer when store bad packet is enabled
+  * CVE-2023-31085
+    - ubi: Refuse attaching if mtd's erasesize is 0
+  * Packaging resync (LP: #1786013)
+    - [Packaging] update helper scripts
+
+ -- Kuba Pawlak <kuba.pawlak@canonical.com>  Fri, 03 Nov 2023 13:35:30 +0100
+
 linux-aws (5.4.0-1113.123) focal; urgency=medium
 
   * focal/linux-aws: 5.4.0-1113.123 -proposed tracker (LP: #2037973)
