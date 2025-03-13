@@ -156,6 +156,7 @@ struct hfsplus_sb_info {
 
 	/* Runtime variables */
 	u32 blockoffset;
+	u32 min_io_size;
 	sector_t part_start;
 	sector_t sect_count;
 	int fs_shift;
@@ -306,7 +307,7 @@ struct hfsplus_readdir_data {
  */
 static inline unsigned short hfsplus_min_io_size(struct super_block *sb)
 {
-	return max_t(unsigned short, bdev_logical_block_size(sb->s_bdev),
+	return max_t(unsigned short, HFSPLUS_SB(sb)->min_io_size,
 		     HFSPLUS_SECTOR_SIZE);
 }
 
@@ -406,7 +407,7 @@ void hfs_bmap_free(struct hfs_bnode *node);
 void hfs_bnode_read(struct hfs_bnode *node, void *buf, int off, int len);
 u16 hfs_bnode_read_u16(struct hfs_bnode *node, int off);
 u8 hfs_bnode_read_u8(struct hfs_bnode *node, int off);
-void hfs_bnode_read_key(struct hfs_bnode *node, void *key, int off);
+int hfs_bnode_read_key(struct hfs_bnode *node, void *key, int off);
 void hfs_bnode_write(struct hfs_bnode *node, void *buf, int off, int len);
 void hfs_bnode_write_u16(struct hfs_bnode *node, int off, u16 data);
 void hfs_bnode_clear(struct hfs_bnode *node, int off, int len);
