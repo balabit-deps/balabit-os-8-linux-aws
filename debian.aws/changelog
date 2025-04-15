@@ -1,3 +1,21 @@
+linux-aws (5.4.0-1145.155) focal; urgency=medium
+
+  * focal/linux-aws: 5.4.0-1145.155 -proposed tracker (LP: #2106873)
+
+  [ Ubuntu: 5.4.0-215.235 ]
+
+  * focal/linux: 5.4.0-215.235 -proposed tracker (LP: #2106919)
+  * Packaging resync (LP: #1786013)
+    - [Packaging] update annotations scripts
+  * CVE-2023-52664
+    - net: atlantic: eliminate double free in error handling logic
+  * CVE-2024-26689
+    - ceph: prevent use-after-free in encode_cap_msg()
+  * CVE-2023-52927
+    - netfilter: allow exp not to be removed in nf_ct_find_expectation
+
+ -- Bethany Jamison <bethany.jamison@canonical.com>  Tue, 15 Apr 2025 12:48:10 -0500
+
 linux-aws (5.4.0-1144.154) focal; urgency=medium
 
   * focal/linux-aws: 5.4.0-1144.154 -proposed tracker (LP: #2102590)
